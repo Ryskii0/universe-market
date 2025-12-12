@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dimension C-404 | Citadel</title>
+    <!-- Tailwind via CDN is okay for simple setup, but ideally installed via npm. Keeping for now to ensure styles hold. -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Creepster&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+
+      body {
+        background-color: #0d1117; /* Dark Void */
+        color: #e2e8f0; 
+        font-family: 'Space Mono', monospace; /* Sci-fi terminal font */
+        background-image: radial-gradient(circle at 50% 50%, #1a202c 0%, #0d1117 100%);
+      }
+      
+      /* Portal Green Glows */
+      .glow-green {
+        text-shadow: 0 0 10px #97ce4c;
+      }
+      .border-glow-green {
+        box-shadow: 0 0 10px rgba(151, 206, 76, 0.3);
+      }
+
+      /* Glitch Effect Utility */
+      .glitch-text {
+        position: relative;
+        animation: glitch-skew 1s cubic-bezier(0.25, 0.46, 0.45, 0.94) both infinite;
+        color: #97ce4c;
+      }
+      @keyframes glitch-skew {
+        0% { transform: skew(0deg); }
+        20% { transform: skew(-2deg); }
+        40% { transform: skew(2deg); }
+        60% { transform: skew(-1deg); }
+        80% { transform: skew(1deg); }
+        100% { transform: skew(0deg); }
+      }
+      
+      /* Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0d1117; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #97ce4c; 
+        border-radius: 0;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #42b4ca; 
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "recharts": "https://aistudiocdn.com/recharts@^3.5.1",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
+    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.86.2"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
