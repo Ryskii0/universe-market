@@ -19,13 +19,13 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 // ------------------------------------------------------------------
 
 export interface ApiService {
-  login(email: string): Promise<void>; 
-  verifyOtp(email: string, token: string): Promise<void>;
+  register(username: string, password: string): Promise<void>;
+  login(username: string, password: string): Promise<void>;
   logout(): Promise<void>;
   getCurrentUser(): Promise<User | null>;
   selectRole(role: 'INTERN' | 'FULL_TIME'): Promise<User>;
   resetMyRole(): Promise<void>; 
-  resetUserRoleByEmail(email: string): Promise<void>;
+  resetUserRoleByUsername(username: string, newBalance?: number): Promise<void>;
 
   getMarkets(): Promise<Market[]>;
   getMarket(id: string): Promise<Market | undefined>;
@@ -49,8 +49,9 @@ export interface ApiService {
   // Admin
   triggerDailyCost(): Promise<void>;
   settleMarket(marketId: string, winningOutcomeId: string, finalPrice: number): Promise<void>;
-  addPoints(email: string, points: number): Promise<void>;
+  addPoints(username: string, points: number): Promise<void>;
   airdropPointsToActiveUsers(amount: number): Promise<number>; // For Event C
+  getUserAllTransactions(userId: string): Promise<Transaction[]>;
 }
 
 // ============================================================================
@@ -63,35 +64,42 @@ class SupabaseApi implements ApiService {
     this.supabase = createClient(url, key);
   }
 
-  async login(email: string): Promise<void> {
-    const { error } = await this.supabase.auth.signInWithOtp({
-      email: email,
-      options: { shouldCreateUser: true }
+  async register(username: string, password: string): Promise<void> {
+    const { data, error } = await this.supabase.rpc('register_user', {
+      p_username: username,
+      p_password: password
     });
     if (error) throw new Error(error.message);
+    
+    // 保存 token 到 localStorage
+    if (data?.token) {
+      localStorage.setItem('supabase_token', data.token);
+    }
   }
 
-  async verifyOtp(email: string, token: string): Promise<void> {
-      const { data, error } = await this.supabase.auth.verifyOtp({
-          email, token, type: 'email'
-      });
-      if (error) throw new Error(error.message);
-      
-      if (data.session?.user) {
-        const { data: profile } = await this.supabase.from('profiles').select('*').eq('id', data.session.user.id).maybeSingle();
-        if (!profile) {
-            await this.supabase.from('profiles').insert({ 
-                id: data.session.user.id, 
-                email: data.session.user.email,
-                balance: 0, 
-                role: null 
-            });
-        }
-      }
+  async login(username: string, password: string): Promise<void> {
+    const { data, error } = await this.supabase.rpc('login_user', {
+      p_username: username,
+      p_password: password
+    });
+    if (error) throw new Error(error.message);
+    
+    // 保存 token 到 localStorage
+    if (data?.token) {
+      localStorage.setItem('supabase_token', data.token);
+    }
   }
 
   async logout(): Promise<void> {
-    await this.supabase.auth.signOut();
+    const token = localStorage.getItem('supabase_token');
+    if (token) {
+      try {
+        await this.supabase.rpc('logout_user', { p_token: token });
+      } catch (e) {
+        console.warn('Logout RPC failed:', e);
+      }
+    }
+    localStorage.removeItem('supabase_token');
   }
 
   async logUserLogin(userId: string): Promise<void> {
@@ -103,75 +111,62 @@ class SupabaseApi implements ApiService {
   }
 
   async getCurrentUser(): Promise<User | null> {
-    const { data: { session } } = await this.supabase.auth.getSession();
-    if (!session?.user) return null;
+    const token = localStorage.getItem('supabase_token');
+    if (!token) return null;
 
-    const { data: profile } = await this.supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+    try {
+      const { data, error } = await this.supabase.rpc('get_user_by_token', { p_token: token });
+      if (error) {
+        // Token 无效或过期，清除
+        localStorage.removeItem('supabase_token');
+        return null;
+      }
 
-    if (!profile) {
-        return {
-            id: session.user.id,
-            email: session.user.email!,
-            isAdmin: false,
-            balance: 0,
-            role: null,
-            portfolioValue: 0,
-            isBankrupt: false
-        };
+      if (!data) return null;
+
+      return {
+        id: data.id,
+        username: data.username,
+        isAdmin: data.is_admin || false,
+        balance: data.balance || 0,
+        role: data.role,
+        isBankrupt: (data.balance || 0) <= 0,
+        portfolioValue: 0
+      };
+    } catch (e) {
+      console.error('Failed to get current user:', e);
+      localStorage.removeItem('supabase_token');
+      return null;
     }
-
-    return {
-      id: session.user.id,
-      email: session.user.email!,
-      isAdmin: profile.is_admin || false,
-      balance: profile.balance,
-      role: profile.role,
-      isBankrupt: profile.balance <= 0,
-      portfolioValue: 0 
-    };
   }
 
   async selectRole(role: 'INTERN' | 'FULL_TIME'): Promise<User> {
-      const { data: { session } } = await this.supabase.auth.getSession();
-      if (!session?.user) throw new Error("Login required");
+      const user = await this.getCurrentUser();
+      if (!user) throw new Error("Login required");
       
-      const balance = role === 'INTERN' ? 1000 : 5000;
+      const { data, error } = await this.supabase.rpc('select_user_role', {
+        p_user_id: user.id,
+        p_role: role
+      });
       
-      const { data: updatedProfile, error } = await this.supabase.from('profiles')
-          .upsert({ 
-              id: session.user.id,
-              email: session.user.email,
-              role: role,
-              balance: balance
-          }, { onConflict: 'id' })
-          .select()
-          .single();
-
-      if (error) throw error;
+      if (error) throw new Error(error.message);
       
-      return {
-          id: session.user.id,
-          email: session.user.email!,
-          isAdmin: updatedProfile.is_admin || false,
-          balance: updatedProfile.balance,
-          role: updatedProfile.role,
-          isBankrupt: false,
-          portfolioValue: 0,
-      };
+      // 刷新用户信息
+      return await this.getCurrentUser() as User;
   }
   
   async resetMyRole(): Promise<void> {
-      const { data: { session } } = await this.supabase.auth.getSession();
-      if (!session?.user) return;
-      await this.supabase.from('profiles').update({ role: null }).eq('id', session.user.id);
+      const user = await this.getCurrentUser();
+      if (!user) return;
+      await this.supabase.rpc('reset_user_role', { p_user_id: user.id });
   }
 
-  async resetUserRoleByEmail(email: string): Promise<void> {
-      // First get user by email
-      const { data: profile } = await this.supabase.from('profiles').select('id').eq('email', email).maybeSingle();
-      if (!profile) throw new Error("User not found (Must login once)");
-      
-      await this.supabase.from('profiles').update({ role: null }).eq('id', profile.id);
+  async resetUserRoleByUsername(username: string, newBalance?: number): Promise<void> {
+      const { error } = await this.supabase.rpc('reset_user_by_username', {
+        p_username: username,
+        p_new_balance: newBalance || null
+      });
+      if (error) throw new Error(error.message);
   }
 
   async getMarkets(): Promise<Market[]> {
@@ -435,6 +430,31 @@ class SupabaseApi implements ApiService {
       }));
   }
 
+  async getUserAllTransactions(userId: string): Promise<Transaction[]> {
+      const { data, error } = await this.supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+          console.error("Failed to fetch user transactions:", JSON.stringify(error));
+          return [];
+      }
+
+      return data.map((t: any) => ({
+          id: t.id,
+          userId: t.user_id,
+          marketId: t.market_id,
+          outcomeId: t.outcome_id,
+          type: t.type,
+          amount: t.amount,
+          shares: t.shares,
+          price: t.price,
+          timestamp: t.created_at
+      }));
+  }
+
   async getMarketHistory(marketId: string, range: TimeRange): Promise<PriceHistoryPoint[]> {
     const market = await this.getMarket(marketId);
     if (!market || market.outcomes.length === 0) return [];
@@ -510,8 +530,8 @@ class SupabaseApi implements ApiService {
   
   async getLeaderboard(): Promise<LeaderboardEntry[]> {
       const { data, error } = await this.supabase
-        .from('profiles')
-        .select('id, email, balance')
+        .from('users')
+        .select('id, username, balance')
         .order('balance', { ascending: false })
         .limit(5);
         
@@ -519,8 +539,8 @@ class SupabaseApi implements ApiService {
       
       return data.map((d: any) => ({
           userId: d.id,
-          email: d.email,
-          balance: d.balance
+          username: d.username,
+          balance: d.balance || 0
       }));
   }
 
@@ -536,7 +556,7 @@ class SupabaseApi implements ApiService {
       return data.map((m: any) => ({
           id: m.id,
           userId: m.user_id,
-          email: m.email,
+          username: m.username,
           content: m.content,
           createdAt: m.created_at
       }));
@@ -548,49 +568,49 @@ class SupabaseApi implements ApiService {
       
       await this.supabase.from('global_chat').insert({
           user_id: user.id,
-          email: user.email,
+          username: user.username,
           content
       });
   }
 
   async triggerDailyCost(): Promise<void> {
-      const { data: users, error } = await this.supabase.from('profiles').select('*');
+      const { data: users, error } = await this.supabase.from('users').select('*');
       if (error) throw error;
       if (!users) return;
 
       for (const u of users) {
           if (!u.role) continue;
           const cost = u.role === 'INTERN' ? 30 : 150;
-          await this.supabase.from('profiles').update({ balance: u.balance - cost }).eq('id', u.id);
+          await this.supabase.from('users').update({ balance: (u.balance || 0) - cost }).eq('id', u.id);
       }
   }
 
   async settleMarket(marketId: string, winningOutcomeId: string, finalPrice: number): Promise<void> {
-     // --- 新增代码开始 ---
-        // 调用后端 Supabase RPC 函数，一次性完成：更新状态、发钱、清算
-        const { error } = await this.supabase.rpc('settle_market_and_payout', {
-            p_market_id: marketId,
-            p_winning_outcome_id: winningOutcomeId,
-            p_final_price: finalPrice 
-        });
+     const token = localStorage.getItem('supabase_token');
+     if (!token) throw new Error("Login required");
+     
+     // 调用后端 Supabase RPC 函数，一次性完成：更新状态、发钱、清算
+     const { error } = await this.supabase.rpc('settle_market_and_payout', {
+         p_market_id: marketId,
+         p_winning_outcome_id: winningOutcomeId,
+         p_final_price: finalPrice,
+         p_token: token
+     });
 
-        if (error) {
-            console.error("Settlement RPC failed:", error);
-            throw new Error(`CRITICAL: Settlement failed. ${error.message}`);
-        }
+     if (error) {
+         console.error("Settlement RPC failed:", error);
+         throw new Error(`CRITICAL: Settlement failed. ${error.message}`);
+     }
 
-        console.log("Settlement complete via RPC.");
-        // --- 新增代码结束 ---
+     console.log("Settlement complete via RPC.");
   }
 
-  async addPoints(email: string, points: number): Promise<void> {
-    const { data: profile } = await this.supabase.from('profiles').select('id, balance').eq('email', email).maybeSingle();
-    if(profile) {
-        const { error } = await this.supabase.from('profiles').update({ balance: profile.balance + points }).eq('id', profile.id);
-        if (error) throw new Error(error.message);
-    } else {
-        throw new Error("User not found (Must login once)");
-    }
+  async addPoints(username: string, points: number): Promise<void> {
+    const { error } = await this.supabase.rpc('add_points_to_user', {
+      p_username: username,
+      p_points: points
+    });
+    if (error) throw new Error(error.message);
   }
 
   async airdropPointsToActiveUsers(amount: number): Promise<number> {
@@ -606,18 +626,16 @@ class SupabaseApi implements ApiService {
       if (!txs || txs.length === 0) return 0;
       
       const uniqueUserIds = Array.from(new Set(txs.map((t: any) => t.user_id)));
-      const shuffled = uniqueUserIds.sort(() => 0.5 - Math.random());
-      const selected = shuffled.slice(0, 10);
       
-      let count = 0;
-      for (const uid of selected) {
-           const { data: u } = await this.supabase.from('profiles').select('balance').eq('id', uid).single();
-           if (u) {
-               await this.supabase.from('profiles').update({ balance: u.balance + amount }).eq('id', uid);
-               count++;
-           }
-      }
-      return count;
+      // 使用 RPC 批量添加积分
+      const { data, error: rpcError } = await this.supabase.rpc('airdrop_points_to_users', {
+        p_user_ids: uniqueUserIds,
+        p_points: amount
+      });
+      
+      if (rpcError) throw new Error(rpcError.message);
+      
+      return data || 0;
   }
 }
 

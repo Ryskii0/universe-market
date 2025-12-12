@@ -182,33 +182,45 @@ $$;
 -- RPC 函数：选择角色
 -- ============================================================================
 CREATE OR REPLACE FUNCTION select_user_role(
-    p_token TEXT,
-    p_role TEXT,
-    p_balance NUMERIC
+    p_user_id UUID,
+    p_role TEXT
 )
 RETURNS JSON
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
-    v_user_id UUID;
     v_user JSON;
+    v_default_balance NUMERIC;
+    v_current_balance NUMERIC;
 BEGIN
-    -- 验证 token 并获取 user_id
-    SELECT s.user_id INTO v_user_id
-    FROM user_sessions s
-    WHERE s.token = p_token
-      AND s.expires_at > NOW();
+    -- 获取当前余额
+    SELECT COALESCE(balance, 0) INTO v_current_balance
+    FROM users
+    WHERE id = p_user_id;
     
-    IF v_user_id IS NULL THEN
-        RAISE EXCEPTION 'Invalid or expired token';
+    IF v_current_balance IS NULL THEN
+        RAISE EXCEPTION 'User not found';
+    END IF;
+    
+    -- 根据角色设置默认余额
+    IF p_role = 'INTERN' THEN
+        v_default_balance := 1000;
+    ELSIF p_role = 'FULL_TIME' THEN
+        v_default_balance := 5000;
+    ELSE
+        RAISE EXCEPTION 'Invalid role';
     END IF;
     
     -- 更新用户角色和余额
+    -- 如果当前余额 <= 0 或 NULL，设置默认余额；否则保留现有余额（例如管理员设置的余额）
     UPDATE users
     SET role = p_role::TEXT,
-        balance = p_balance
-    WHERE id = v_user_id;
+        balance = CASE 
+            WHEN v_current_balance <= 0 OR v_current_balance IS NULL THEN v_default_balance
+            ELSE v_current_balance
+        END
+    WHERE id = p_user_id;
     
     -- 返回更新后的用户信息
     SELECT json_build_object(
@@ -219,7 +231,7 @@ BEGIN
         'is_admin', u.is_admin
     ) INTO v_user
     FROM users u
-    WHERE u.id = v_user_id;
+    WHERE u.id = p_user_id;
     
     RETURN v_user;
 END;
@@ -229,27 +241,15 @@ $$;
 -- RPC 函数：重置用户角色
 -- ============================================================================
 CREATE OR REPLACE FUNCTION reset_user_role(
-    p_token TEXT
+    p_user_id UUID
 )
 RETURNS VOID
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
-DECLARE
-    v_user_id UUID;
 BEGIN
-    -- 验证 token 并获取 user_id
-    SELECT s.user_id INTO v_user_id
-    FROM user_sessions s
-    WHERE s.token = p_token
-      AND s.expires_at > NOW();
-    
-    IF v_user_id IS NULL THEN
-        RAISE EXCEPTION 'Invalid or expired token';
-    END IF;
-    
     -- 重置角色
-    UPDATE users SET role = NULL WHERE id = v_user_id;
+    UPDATE users SET role = NULL WHERE id = p_user_id;
 END;
 $$;
 
@@ -276,6 +276,12 @@ $$;
 -- 启用 RLS
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
+
+-- 删除已存在的策略（如果存在）
+DROP POLICY IF EXISTS "Users can view own data" ON users;
+DROP POLICY IF EXISTS "Only RPC can insert users" ON users;
+DROP POLICY IF EXISTS "Only RPC can update users" ON users;
+DROP POLICY IF EXISTS "Only RPC can manage sessions" ON user_sessions;
 
 -- users 表策略：用户可以查看自己的信息，所有人可以查看排行榜（只读）
 CREATE POLICY "Users can view own data" ON users
