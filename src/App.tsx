@@ -136,7 +136,7 @@ const Navbar = ({ onNavigate }: { onNavigate: (page: string) => void }) => {
           {/* Left: Author */}
           <div className="flex justify-between md:justify-start items-center w-full">
             <a 
-                href="https://bytedance.sg.larkoffice.com/docx/PV6ydG9PcooXq9xtQEHlmGCEgGg" 
+                href="https://ai.feishu.cn/wiki/LEPLw2CKsipp6JkUXracx1ORnOb?from=from_copylink" 
                 target="_blank" 
                 rel="noreferrer"
                 className="flex items-center gap-2 hover:text-white transition-colors group"
